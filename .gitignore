@@ -1,0 +1,9 @@
+# XcodeGen이 GitHub 빌드 때 생성하므로 저장소에 올리지 않는다
+*.xcodeproj/
+build/
+Payload/
+*.ipa
+.DS_Store
+# 수집 데이터는 공개 저장소에 올리지 않는다
+data/
+Sources/Info.plist
