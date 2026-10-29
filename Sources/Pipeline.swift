@@ -1,4 +1,5 @@
 import BackgroundTasks
+import UIKit
 import Foundation
 import UserNotifications
 
@@ -31,6 +32,7 @@ enum Pipeline {
     // MARK: - 백그라운드 갱신
 
     static func registerBackgroundTask() {
+        logBackgroundDiagnostics()
         BGTaskScheduler.shared.register(forTaskWithIdentifier: refreshTaskID, using: nil) { task in
             guard let task = task as? BGAppRefreshTask else { return }
             task.expirationHandler = {
@@ -40,6 +42,22 @@ enum Pipeline {
                 task.setTaskCompleted(success: true)
             }
         }
+    }
+
+    /// 백그라운드 갱신 예약이 거부될 때 원인을 찾기 위한 정보 (재서명 후 실제 번들 값)
+    private static func logBackgroundDiagnostics() {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let bundleID = Bundle.main.bundleIdentifier ?? "?"
+        let modes = (info["UIBackgroundModes"] as? [String])?.joined(separator: ",") ?? "없음"
+        let ids = (info["BGTaskSchedulerPermittedIdentifiers"] as? [String])?.joined(separator: ",") ?? "없음"
+        let status: String
+        switch UIApplication.shared.backgroundRefreshStatus {
+        case .available: status = "켜짐"
+        case .denied: status = "꺼짐"
+        case .restricted: status = "제한됨"
+        @unknown default: status = "알 수 없음"
+        }
+        LogStore.shared.add("번들 \(bundleID) / 모드 \(modes) / 허용 ID \(ids) / 백그라운드 새로 고침 \(status)")
     }
 
     private static func scheduleBackgroundRefresh() {
