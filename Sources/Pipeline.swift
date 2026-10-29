@@ -6,7 +6,12 @@ import UserNotifications
 /// 앱이 깨어날 때마다(앱 열림, 알림 응답, 백그라운드 갱신) 하는 일을 한곳에 모은다.
 /// iOS는 원하는 시각에 앱을 깨워 주지 않으므로, 깨어날 때마다 밀린 일을 처리하고 다음 예약을 채운다.
 enum Pipeline {
-    static let refreshTaskID = "com.gipum.righttime.refresh"
+    /// AltStore가 재서명하면서 번들 ID와 함께 이 값도 바꾸므로(예: com.gipum.righttime.XXXX.refresh)
+    /// 코드에 고정하지 않고 Info.plist에 실제로 들어 있는 값을 쓴다.
+    static let refreshTaskID: String = {
+        let ids = Bundle.main.object(forInfoDictionaryKey: "BGTaskSchedulerPermittedIdentifiers") as? [String]
+        return ids?.first ?? "com.gipum.righttime.refresh"
+    }()
     static let noResponseAfter: TimeInterval = 2 * 60 * 60
     static let sensorDelay: TimeInterval = 5 * 60   // 센서 기록이 조회 가능해질 때까지 기다리는 시간
 
