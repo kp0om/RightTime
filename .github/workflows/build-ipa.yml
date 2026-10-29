@@ -30,6 +30,10 @@ jobs:
           fi
           grep -E "warning:" build.log | grep "/Sources/" | sort -u | head -20 | sed 's/^/::warning::/' || true
 
+      - name: Show built Info.plist
+        run: |
+          echo "::notice title=Info.plist::$(plutil -convert json -o - build/Build/Products/Release-iphoneos/RightTime.app/Info.plist)"
+
       - name: Package IPA
         run: |
           mkdir -p Payload
