@@ -33,7 +33,8 @@ enum Scheduler {
         UNUserNotificationCenter.current().setNotificationCategories([category])
     }
 
-    /// 앞으로 daysAhead일 중 아직 계획하지 않은 날의 알림을 만든다. 메인 스레드에서 호출한다.
+    /// 앞으로 daysAhead일 동안 날마다 promptsPerDay개가 되도록 모자란 알림을 채운다. 메인 스레드에서 호출한다.
+    /// 설정 변경으로 오늘의 남은 알림이 취소된 경우에도 남은 시간에 다시 채운다.
     static func topUp() {
         let store = DataStore.shared
         let settings = store.settings
@@ -42,13 +43,15 @@ enum Scheduler {
         let calendar = Calendar.current
         let now = Date()
         let today = calendar.startOfDay(for: now)
-        let plannedDays = Set(store.prompts.map { calendar.startOfDay(for: $0.scheduledAt) })
+        let earliest = now.addingTimeInterval(120)
 
         var newPrompts: [Prompt] = []
         for offset in 0..<daysAhead {
-            guard let day = calendar.date(byAdding: .day, value: offset, to: today),
-                  !plannedDays.contains(day) else { continue }
-            for time in randomTimes(on: day, settings: settings) where time > now.addingTimeInterval(120) {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: today) else { continue }
+            let existing = store.prompts.map(\.scheduledAt).filter { calendar.isDate($0, inSameDayAs: day) }
+            let missing = settings.promptsPerDay - existing.count
+            guard missing > 0 else { continue }
+            for time in randomTimes(on: day, count: missing, after: earliest, avoiding: existing, settings: settings) {
                 newPrompts.append(Prompt(id: UUID().uuidString, text: texts.randomElement() ?? "할 일 확인하기", scheduledAt: time))
             }
         }
@@ -107,26 +110,28 @@ enum Scheduler {
         }
     }
 
-    /// 하루 promptsPerDay개의 시각을 범위 안에서 무작위로 고른다. 서로 minGapMinutes 이상 떨어지게 한다.
-    private static func randomTimes(on day: Date, settings: CollectionSettings) -> [Date] {
-        let startMinute = settings.startHour * 60
-        let endMinute = settings.endHour * 60
-        let count = settings.promptsPerDay
-        guard endMinute > startMinute, count > 0 else { return [] }
+    /// 범위 안에서 무작위 시각을 최대 count개 고른다. 기존 알림과 새 알림이 서로 minGapMinutes 이상 떨어지게 하며,
+    /// 남은 시간이 부족하면 들어갈 수 있는 만큼만 고른다.
+    private static func randomTimes(on day: Date, count: Int, after earliest: Date, avoiding existing: [Date],
+                                    settings: CollectionSettings) -> [Date] {
+        let rangeStart = day.addingTimeInterval(TimeInterval(settings.startHour * 3600))
+        let rangeEnd = day.addingTimeInterval(TimeInterval(settings.endHour * 3600))
+        let start = max(rangeStart, earliest)
+        guard rangeEnd > start, count > 0 else { return [] }
 
-        var minutes: [Int] = []
-        for _ in 0..<500 {
-            let picks = (0..<count).map { _ in Int.random(in: startMinute..<endMinute) }.sorted()
-            if zip(picks, picks.dropFirst()).allSatisfy({ $1 - $0 >= settings.minGapMinutes }) {
-                minutes = picks
-                break
+        let gap = TimeInterval(settings.minGapMinutes * 60)
+        var taken = existing
+        var picked: [Date] = []
+        let candidates = stride(from: start.timeIntervalSince1970, to: rangeEnd.timeIntervalSince1970, by: 60)
+            .map { Date(timeIntervalSince1970: $0 + Double(Int.random(in: 0..<60))) }
+            .filter { $0 < rangeEnd }
+            .shuffled()
+        for time in candidates where picked.count < count {
+            if taken.allSatisfy({ abs($0.timeIntervalSince(time)) >= gap }) {
+                picked.append(time)
+                taken.append(time)
             }
         }
-        if minutes.isEmpty {
-            // 간격 조건을 못 맞추면 범위를 균등하게 나눠 각 칸에서 하나씩 고른다
-            let step = max((endMinute - startMinute) / count, 1)
-            minutes = (0..<count).map { startMinute + $0 * step + Int.random(in: 0..<step) }
-        }
-        return minutes.map { day.addingTimeInterval(TimeInterval($0 * 60 + Int.random(in: 0..<60))) }
+        return picked.sorted()
     }
 }
