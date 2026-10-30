@@ -23,6 +23,21 @@ STATES = ["stationary", "walking", "running", "automotive", "cycling", "unknown"
 WINDOW = pd.Timedelta(minutes=30)
 
 
+def activity_features(starts, states, t):
+    """상태가 바뀐 시각 목록으로 현재 상태, 지속 시간, 직전 30분 상태 비율과 변화 횟수를 만든다."""
+    feats = {"act_now": states[-1], "act_now_age_s": (t - starts[-1]).total_seconds()}
+    window_start = t - WINDOW
+    frac = dict.fromkeys(STATES, 0.0)
+    ends = starts[1:] + [t]
+    for state, a, b in zip(states, starts, ends):
+        overlap = min(b, t) - max(a, window_start)
+        if overlap > pd.Timedelta(0):
+            frac[state] += overlap / WINDOW
+    feats.update({f"act_frac_{s}": v for s, v in frac.items()})
+    feats["act_changes_30m"] = sum(1 for a in starts if a >= window_start)
+    return feats
+
+
 def probes_for_user(df):
     df["ts"] = pd.to_datetime(df["ts"])
     esm = df[df.sensor_id == "Esm"].copy()
@@ -37,6 +52,10 @@ def probes_for_user(df):
 
     act = df[df.sensor_id == "UserAct"][["ts", "UserAct_Type"]].dropna().sort_values("ts")
     act["state"] = act.UserAct_Type.map(ACT_MAP).fillna("unknown")
+    # iPhone(Core Motion)과 맞추기 위해 같은 상태가 이어지는 기록은 하나로 합친다 (still↔tilting 등)
+    act = act[act.state != act.state.shift()]
+    act_ts = pd.DatetimeIndex(act.ts)
+    act_states = act.state.to_numpy()
     acc = df[df.sensor_id == "Acc"][["ts", "Acc_Avg", "Acc_Max"]].dropna().sort_values("ts")
     screen = df[df.sensor_id == "Screen"][["ts", "Screen_Value"]].dropna().sort_values("ts")
 
@@ -48,25 +67,11 @@ def probes_for_user(df):
             "response_s": (p.clicked - t).total_seconds() if pd.notna(p.clicked) else np.nan,
             "responded": int(pd.notna(p.responded)), "timed_out": int(pd.notna(p.timedout)),
         }
-        before = act[act.ts <= t]
-        if len(before):
-            last = before.iloc[-1]
-            row["act_now"] = last.state
-            row["act_now_age_s"] = (t - last.ts).total_seconds()
-            # 직전 30분 동안 각 상태에 머문 비율
-            seg = before[before.ts >= t - WINDOW]
-            starts = [max(t - WINDOW, x) for x in ([last.ts] if seg.empty else [])]
-            times = list(seg.ts) + [t]
-            states = list(seg.state)
-            prior = before[before.ts < t - WINDOW]
-            if len(prior):
-                times = [t - WINDOW] + times
-                states = [prior.iloc[-1].state] + states
-            frac = dict.fromkeys(STATES, 0.0)
-            for s, a, b in zip(states, times[:-1], times[1:]):
-                frac[s] += (b - a) / WINDOW
-            row.update({f"act_frac_{s}": v for s, v in frac.items()})
-            row["act_changes_30m"] = len(seg)
+        # 직전 30분 안에서 바뀐 기록 + 그 직전 상태 하나만 본다 (전체 이력을 매번 보면 느림)
+        end = act_ts.searchsorted(t, side="right")
+        begin = max(act_ts.searchsorted(t - WINDOW, side="left") - 1, 0)
+        if end > 0:
+            row.update(activity_features(list(act_ts[begin:end]), list(act_states[begin:end]), t))
         a = acc[(acc.ts <= t) & (acc.ts >= t - pd.Timedelta(minutes=10))]
         if len(a):
             row["acc_avg"], row["acc_max"] = a.iloc[-1].Acc_Avg, a.iloc[-1].Acc_Max

@@ -48,6 +48,8 @@ def _activity_features(segments, delivered):
         key=lambda x: x[0],
     )
     parsed = [p for p in parsed if p[0] <= delivered]
+    # 같은 상태가 이어지는 기록은 하나로 합친다 (신뢰도만 바뀐 업데이트 등)
+    parsed = [p for i, p in enumerate(parsed) if i == 0 or p[1] != parsed[i - 1][1]]
     if not parsed:
         return feats
 
@@ -85,6 +87,13 @@ def _accel_features(context):
     feats["accel_std_last60s"] = float(np.std(last_60s)) if last_60s.size > 10 else np.nan
     # 중력(약 1 g)에서 크게 벗어난 칸의 비율 = 움직임 정도
     feats["accel_moving_frac"] = float(np.mean(np.abs(valid - 1.0) > 0.1)) if valid.size else np.nan
+    # 외부 데이터(MPU)의 Acc_Avg/Acc_Max(직전 30초, 중력 제외, m/s²)에 맞춘 근사값.
+    # 5 Hz 구간 평균이라 순간 최댓값은 MPU보다 작게 나온다.
+    last_30s = series[-150:] if series.size else series
+    last_30s = last_30s[last_30s >= 0] if last_30s.size else last_30s
+    linear = np.abs(last_30s - 1.0) * 9.81
+    feats["phone_motion_avg"] = float(np.mean(linear)) if linear.size else np.nan
+    feats["phone_motion_max"] = float(np.max(linear)) if linear.size else np.nan
     return feats
 
 
