@@ -2,6 +2,7 @@ name: Build unsigned IPA
 
 on:
   push:
+    paths-ignore: ["ml/**", "**.md"]
   workflow_dispatch:
 
 jobs:
