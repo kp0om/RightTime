@@ -46,6 +46,11 @@ final class ContextCollector {
         var series: [Float] = []
     }
 
+    static var isAuthorized: Bool {
+        CMMotionActivityManager.authorizationStatus() == .authorized
+            && CMSensorRecorder.authorizationStatus() == .authorized
+    }
+
     /// 가속도 기록을 12시간(최대) 동안 켠다. 앱이 깨어날 때마다 다시 불러 기록이 끊기지 않게 한다.
     func startAccelerometerRecording() {
         guard CMSensorRecorder.isAccelerometerRecordingAvailable() else {

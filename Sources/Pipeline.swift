@@ -25,7 +25,9 @@ enum Pipeline {
         ContextCollector.shared.startAccelerometerRecording()
 
         resolveOutcomes {
+            LogStore.shared.add("단계: context 수집")
             collectMissingContexts {
+                LogStore.shared.add("단계: 예약 보충")
                 Scheduler.topUp()
                 Scheduler.resyncPending()
                 scheduleBackgroundRefresh()
@@ -108,6 +110,13 @@ enum Pipeline {
             return $0.context == nil && age > sensorDelay && age < 7 * 24 * 60 * 60
         }
         guard !targets.isEmpty else {
+            next()
+            return
+        }
+        // 설정 초기화 등으로 모션 권한이 아직 없으면 Core Motion 기록을 조회하지 않는다.
+        // 권한을 허용한 뒤 다음에 깨어날 때 다시 시도한다.
+        guard ContextCollector.isAuthorized else {
+            LogStore.shared.add("모션 권한이 없어 context \(targets.count)건 수집을 미룸")
             next()
             return
         }

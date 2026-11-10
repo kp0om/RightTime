@@ -17,10 +17,12 @@ targets:
         NSMotionUsageDescription: 알림을 받기 직전의 움직임과 활동 상태를 기록해 알림을 보기 좋은 때를 학습합니다. 데이터는 기기 안에만 저장됩니다.
         UIBackgroundModes: [fetch]
         BGTaskSchedulerPermittedIdentifiers: [com.gipum.righttime.refresh]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.gipum.righttime
-        MARKETING_VERSION: "1.0"
+        MARKETING_VERSION: "1.0.1"
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.0"
