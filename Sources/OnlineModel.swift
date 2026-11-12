@@ -39,13 +39,16 @@ final class OnlineModel: ObservableObject {
         .appendingPathComponent("righttime-model.json")
 
     private init() {
-        initial = Self.loadInitial()
-        if let data = try? Data(contentsOf: fileURL),
+        let start = Self.loadInitial()
+        initial = start
+        let url = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("righttime-model.json")
+        if let data = try? Data(contentsOf: url),
            let saved = try? JSONDecoder().decode(State.self, from: data),
-           saved.features == initial.features {
+           saved.features == start.features {
             state = saved
         } else {
-            state = initial
+            state = start
         }
     }
 
