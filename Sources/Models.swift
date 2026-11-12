@@ -1,12 +1,5 @@
 import Foundation
 
-enum PromptOutcome: String, Codable {
-    case pending      // 전달 전이거나 아직 응답 없음
-    case tapped       // 알림을 탭함
-    case dismissed    // 알림을 지움
-    case noResponse   // 전달 후 일정 시간 동안 응답 없음
-}
-
 /// Core Motion 활동 기록 한 구간
 struct ActivitySegment: Codable {
     var start: Date
@@ -44,32 +37,63 @@ struct ContextSnapshot: Codable {
     var notes: [String]               // 조회 실패 사유 등
 }
 
-/// 시험 reminder 하나
-struct Prompt: Codable, Identifiable {
-    var id: String
-    var text: String
-    var scheduledAt: Date
-    var deliveredAt: Date? = nil
-    var outcome: PromptOutcome = .pending
-    var respondedAt: Date? = nil
-    var context: ContextSnapshot? = nil
+/// 사용자가 입력한 일정 하나. windowStart부터 deadline 사이에 AI가 알림 시점을 고른다.
+struct Reminder: Codable, Identifiable {
+    enum Status: String, Codable {
+        case waiting     // 아직 전달 전 (AI가 시점을 고르는 중)
+        case delivered   // 알림을 보냈고 응답 대기
+        case done        // 확인했거나 마감이 지나 끝남
+    }
 
-    var responseSeconds: Double? {
-        guard let respondedAt else { return nil }
-        return respondedAt.timeIntervalSince(deliveredAt ?? scheduledAt)
+    var id = UUID().uuidString
+    var title: String
+    var windowStart: Date
+    var deadline: Date
+    var createdAt = Date()
+    var explore = false          // 탐색 일정: AI 판단 대신 무작위 시각에 보낸다
+    var exploreAt: Date? = nil
+    var status: Status = .waiting
+    var cooldownUntil: Date? = nil   // "지금은 곤란해요" 뒤 다시 판단하기까지 기다리는 시각
+}
+
+enum DeliveryKind: String, Codable {
+    case policy     // AI가 지금이 좋다고 판단해 보냄
+    case explore    // 탐색용 무작위 시각
+    case failsafe   // 마감 시각 안전장치
+
+    var korean: String {
+        switch self {
+        case .policy: return "AI 판단"
+        case .explore: return "탐색"
+        case .failsafe: return "마감"
+        }
     }
 }
 
-/// 앱이 깨어난 시각과 이유 (feasibility 점검용)
-struct WakeEvent: Codable {
-    var date: Date
-    var reason: String
+/// 알림 한 번 전달 = 학습 샘플 하나. 60초 안에 확인하면 라벨 1.
+struct Sample: Codable, Identifiable {
+    var id = UUID().uuidString
+    var reminderId: String
+    var title: String
+    var kind: DeliveryKind
+    var deliveredAt: Date
+    var p: Double? = nil                 // 전달 시점의 예측 확률 (AI 판단일 때)
+    var features: [Double?]? = nil       // 전달 시점 특징 (탐색·마감은 나중에 센서 기록으로 채움)
+    var respondedAt: Date? = nil
+    var response: String? = nil          // 확인 / 곤란 / 지움 / 탭
+    var label: Int? = nil
+    var learned = false
+    var pBeforeUpdate: Double? = nil
+    var pAfterUpdate: Double? = nil
 }
 
-struct CollectionSettings: Codable, Equatable {
-    var startHour = 9
-    var endHour = 22
-    var promptsPerDay = 7
-    var minGapMinutes = 45
-    var enabled = false
+/// AI가 판단할 때마다 남기는 기록
+struct DecisionRecord: Codable, Identifiable {
+    var id = UUID().uuidString
+    var time: Date
+    var title: String
+    var p: Double
+    var theta: Double
+    var delivered: Bool
+    var note: String
 }

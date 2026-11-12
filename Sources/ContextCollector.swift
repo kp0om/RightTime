@@ -37,6 +37,11 @@ final class ContextCollector {
     private let motionQueue = OperationQueue()
     private let accelQueue = DispatchQueue(label: "righttime.accel", qos: .utility)
 
+    // 앱이 화면에 떠 있을 때 쓰는 실시간 가속도 (CMSensorRecorder 기록은 몇 분 늦게 조회될 수 있다)
+    private let motionManager = CMMotionManager()
+    private var liveBuffer: [(date: Date, magnitude: Float)] = []
+    private let liveLock = NSLock()
+
     private struct AccelSummary {
         var count = 0
         var mean: Double?
@@ -58,6 +63,36 @@ final class ContextCollector {
             return
         }
         recorder.recordAccelerometer(forDuration: 12 * 60 * 60)
+    }
+
+    /// 5 Hz로 가속도를 받아 최근 30초를 보관한다. 앱이 화면에 있을 때만 켠다.
+    func startLiveAccelerometer() {
+        guard motionManager.isAccelerometerAvailable, !motionManager.isAccelerometerActive else { return }
+        motionManager.accelerometerUpdateInterval = 1 / Self.accelBinsPerSecond
+        motionManager.startAccelerometerUpdates(to: motionQueue) { [weak self] data, _ in
+            guard let self, let a = data?.acceleration else { return }
+            let magnitude = Float((a.x * a.x + a.y * a.y + a.z * a.z).squareRoot())
+            let now = Date()
+            self.liveLock.lock()
+            self.liveBuffer.append((now, magnitude))
+            self.liveBuffer.removeAll { now.timeIntervalSince($0.date) > 30 }
+            self.liveLock.unlock()
+        }
+    }
+
+    func stopLiveAccelerometer() {
+        motionManager.stopAccelerometerUpdates()
+        liveLock.lock()
+        liveBuffer.removeAll()
+        liveLock.unlock()
+    }
+
+    /// 최근 30초 실시간 가속도 크기(g). 20초 이상 모였을 때만 돌려준다.
+    func liveSeries() -> [Float]? {
+        liveLock.lock()
+        defer { liveLock.unlock() }
+        guard let first = liveBuffer.first, Date().timeIntervalSince(first.date) >= 20 else { return nil }
+        return liveBuffer.map(\.magnitude)
     }
 
     /// 첫 조회 때 iOS가 모션 권한을 묻는다.
