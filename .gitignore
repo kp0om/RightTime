@@ -8,3 +8,4 @@ Payload/
 data/
 Sources/Info.plist
 *.json
+__pycache__/
