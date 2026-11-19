@@ -1,7 +1,7 @@
 import Foundation
 
 /// 기기 안에서 응답 하나마다 바로 갱신하는 로지스틱 회귀.
-/// 시작 가중치는 공개 데이터(MPU)와 내 데이터 47개로 학습한 개인화 모델(initial_model.json).
+/// 시작 가중치는 공개 데이터(MPU)와 내 데이터 47개로 학습한 개인화 모델(InitialModel.swift).
 final class OnlineModel: ObservableObject {
     static let shared = OnlineModel()
 
@@ -15,17 +15,6 @@ final class OnlineModel: ObservableObject {
         var theta: Double
         var updates: Int = 0
         var trainedOn: String = ""
-    }
-
-    private struct InitialFile: Codable {
-        var features: [String]
-        var impute: [Double]
-        var mean: [Double]
-        var scale: [Double]
-        var coef: [Double]
-        var intercept: Double
-        var theta: Double
-        var trained_on: String
     }
 
     /// 학습률과, 시작 가중치에서 너무 멀어지지 않게 하는 정도
@@ -45,7 +34,7 @@ final class OnlineModel: ObservableObject {
             .appendingPathComponent("righttime-model.json")
         if let data = try? Data(contentsOf: url),
            let saved = try? JSONDecoder().decode(State.self, from: data),
-           saved.features == start.features {
+           saved.features == start.features, saved.trainedOn == start.trainedOn {
             state = saved
         } else {
             state = start
@@ -53,18 +42,9 @@ final class OnlineModel: ObservableObject {
     }
 
     private static func loadInitial() -> State {
-        guard let url = Bundle.main.url(forResource: "initial_model", withExtension: "json"),
-              let data = try? Data(contentsOf: url),
-              let file = try? JSONDecoder().decode(InitialFile.self, from: data),
-              file.features == Features.names else {
-            LogStore.shared.add("초기 모델을 읽지 못해 0 가중치로 시작")
-            let n = Features.names.count
-            return State(features: Features.names, impute: .init(repeating: 0, count: n),
-                         mean: .init(repeating: 0, count: n), scale: .init(repeating: 1, count: n),
-                         coef: .init(repeating: 0, count: n), intercept: 0, theta: 0.5)
-        }
-        return State(features: file.features, impute: file.impute, mean: file.mean, scale: file.scale,
-                     coef: file.coef, intercept: file.intercept, theta: file.theta, trainedOn: file.trained_on)
+        State(features: InitialModel.features, impute: InitialModel.impute, mean: InitialModel.mean,
+              scale: InitialModel.scale, coef: InitialModel.coef, intercept: InitialModel.intercept,
+              theta: InitialModel.theta, trainedOn: InitialModel.trainedOn)
     }
 
     var theta: Double { state.theta }
