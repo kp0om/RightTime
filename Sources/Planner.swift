@@ -18,6 +18,8 @@ enum Planner {
     static let labelSeconds: TimeInterval = 60
     static let sensorDelay: TimeInterval = 5 * 60   // 센서 기록이 조회 가능해질 때까지 기다리는 시간
     static let cooldown: TimeInterval = 15 * 60
+    /// 일정을 넣은 직후에는 앱을 만지고 있어 확률이 높게 나오므로, 이만큼 지나야 보낸다
+    static let minDelayAfterAdd: TimeInterval = 15 * 60
     static let categoryID = "reminder"
     static let confirmAction = "confirm"
     static let laterAction = "later"
@@ -83,7 +85,7 @@ enum Planner {
         var reminder = Reminder(title: title, windowStart: max(windowStart, now), deadline: deadline)
         if Double.random(in: 0..<1) < exploreRate {
             reminder.explore = true
-            let earliest = max(reminder.windowStart, now.addingTimeInterval(60)).timeIntervalSince1970
+            let earliest = max(reminder.windowStart, now.addingTimeInterval(minDelayAfterAdd)).timeIntervalSince1970
             let latest = deadline.addingTimeInterval(-60).timeIntervalSince1970
             let at = earliest < latest ? Date(timeIntervalSince1970: .random(in: earliest...latest)) : deadline
             reminder.exploreAt = at
@@ -306,6 +308,7 @@ enum Planner {
         let waiting = store.reminders.filter {
             $0.status == .waiting && !$0.explore && $0.windowStart <= now && now < $0.deadline
                 && ($0.cooldownUntil ?? .distantPast) <= now
+                && now.timeIntervalSince($0.createdAt) >= minDelayAfterAdd
         }
         guard let target = waiting.min(by: { $0.deadline < $1.deadline }) else {
             next()
@@ -322,11 +325,14 @@ enum Planner {
             let total = max(target.deadline.timeIntervalSince(target.windowStart), 1)
             let remaining = min(max(target.deadline.timeIntervalSince(now) / total, 0), 1)
             let theta = model.theta * (0.5 + 0.5 * remaining)
-            let deliver = p >= theta
+            // 앱 화면을 보고 있는 중에는 보내지 않는다 (p는 보여 주기만 한다)
+            let inApp = UIApplication.shared.applicationState == .active
+            let deliver = p >= theta && !inApp
             store.lastP = p
             store.lastEvaluated = now
+            let note = p >= theta && inApp ? "\(reason) · 앱 사용 중이라 보류" : reason
             store.decisions.append(DecisionRecord(time: now, title: target.title, p: p, theta: theta,
-                                                  delivered: deliver, note: reason))
+                                                  delivered: deliver, note: note))
 
             if deliver, let ri = store.reminderIndex(target.id), store.reminders[ri].status == .waiting {
                 cancel(target.id, kinds: [.failsafe])
