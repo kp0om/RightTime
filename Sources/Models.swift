@@ -60,14 +60,23 @@ enum DeliveryKind: String, Codable {
     case policy     // AI가 지금이 좋다고 판단해 보냄
     case explore    // 탐색용 무작위 시각
     case failsafe   // 마감 시각 안전장치
+    case probe      // 사용자 학습 모드의 무작위 학습 알림 (일정과 무관)
 
     var korean: String {
         switch self {
         case .policy: return "AI 판단"
         case .explore: return "탐색"
         case .failsafe: return "마감"
+        case .probe: return "학습 알림"
         }
     }
+}
+
+/// 사용자 학습 모드가 켜져 있을 때 예약하는 무작위 학습 알림 하나
+struct Probe: Codable, Identifiable {
+    var id = "probe-" + UUID().uuidString
+    var at: Date
+    var delivered = false
 }
 
 /// 알림 한 번 전달 = 학습 샘플 하나. 60초 안에 확인하면 라벨 1.

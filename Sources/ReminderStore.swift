@@ -7,6 +7,7 @@ final class ReminderStore: ObservableObject {
     @Published var reminders: [Reminder] = []
     @Published var samples: [Sample] = []
     @Published var decisions: [DecisionRecord] = []
+    @Published var probes: [Probe] = []
     @Published var lastP: Double? = nil
     @Published var lastEvaluated: Date? = nil
 
@@ -14,6 +15,7 @@ final class ReminderStore: ObservableObject {
         var reminders: [Reminder]
         var samples: [Sample]
         var decisions: [DecisionRecord]
+        var probes: [Probe]?   // v3에서 추가 (이전 파일에는 없음)
     }
 
     static let fileURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -34,6 +36,7 @@ final class ReminderStore: ObservableObject {
             reminders = saved.reminders
             samples = saved.samples
             decisions = saved.decisions
+            probes = saved.probes ?? []
         }
     }
 
@@ -41,7 +44,9 @@ final class ReminderStore: ObservableObject {
         if decisions.count > 300 {
             decisions.removeFirst(decisions.count - 300)
         }
-        let saved = Saved(reminders: reminders, samples: samples, decisions: decisions)
+        let cutoff = Date().addingTimeInterval(-3 * 24 * 60 * 60)
+        probes.removeAll { $0.at < cutoff }
+        let saved = Saved(reminders: reminders, samples: samples, decisions: decisions, probes: probes)
         if let data = try? Self.encoder.encode(saved) {
             try? data.write(to: Self.fileURL, options: .atomic)
         }

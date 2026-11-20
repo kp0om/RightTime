@@ -7,8 +7,8 @@ struct ContentView: View {
 
     var body: some View {
         TabView {
-            ScheduleView()
-                .tabItem { Label("일정", systemImage: "calendar") }
+            CalendarView()
+                .tabItem { Label("캘린더", systemImage: "calendar") }
             AIView()
                 .tabItem { Label("AI", systemImage: "brain") }
             SettingsView()
@@ -20,49 +20,67 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 일정
+// MARK: - 캘린더
 
-struct ScheduleView: View {
+extension Calendar {
+    static let mondayFirst: Calendar = {
+        var calendar = Calendar.current
+        calendar.firstWeekday = 2
+        return calendar
+    }()
+
+    func startOfMonth(_ date: Date) -> Date {
+        self.date(from: dateComponents([.year, .month], from: date)) ?? date
+    }
+}
+
+struct CalendarView: View {
     @ObservedObject private var store = ReminderStore.shared
+    @AppStorage(Planner.learningModeKey) private var learningMode = false
+    @State private var month = Calendar.mondayFirst.startOfMonth(Date())
+    @State private var path: [Date] = []
     @State private var showingAdd = false
 
-    private var active: [Reminder] { store.reminders.filter { $0.status != .done } }
-    private var finished: [Reminder] { store.reminders.filter { $0.status == .done }.reversed() }
+    private let calendar = Calendar.mondayFirst
+    private let weekdays = ["월", "화", "수", "목", "금", "토", "일"]
 
     var body: some View {
-        NavigationStack {
-            List {
-                if active.isEmpty {
-                    Section {
-                        Text("+ 버튼으로 할 일과 마감 시각을 넣으면, AI가 그 사이에서 알림을 보기 좋은 때를 골라 알려 줍니다.")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                ForEach(groupedByDay(active)) { group in
-                    Section(group.title) {
-                        ForEach(group.items) { ReminderRow(reminder: $0) }
-                            .onDelete { offsets in
-                                offsets.map { group.items[$0].id }.forEach(Planner.delete)
+        NavigationStack(path: $path) {
+            VStack(spacing: 0) {
+                header
+                weekdayRow
+                Divider()
+                GeometryReader { geo in
+                    let days = gridDays
+                    let rows = days.count / 7
+                    let height = geo.size.height / CGFloat(max(rows, 1))
+                    VStack(spacing: 0) {
+                        ForEach(0..<rows, id: \.self) { row in
+                            HStack(spacing: 0) {
+                                ForEach(0..<7, id: \.self) { column in
+                                    let day = days[row * 7 + column]
+                                    DayCell(day: day,
+                                            inMonth: calendar.isDate(day, equalTo: month, toGranularity: .month),
+                                            isSunday: column == 6,
+                                            items: reminders(on: day))
+                                        .frame(maxWidth: .infinity)
+                                        .frame(height: height)
+                                        .contentShape(Rectangle())
+                                        .onTapGesture { path.append(day) }
+                                }
                             }
-                    }
-                }
-                if !finished.isEmpty {
-                    Section("끝난 일정") {
-                        ForEach(finished.prefix(30)) { ReminderRow(reminder: $0) }
-                            .onDelete { offsets in
-                                let items = Array(finished.prefix(30))
-                                offsets.map { items[$0].id }.forEach(Planner.delete)
-                            }
+                            Divider()
+                        }
                     }
                 }
             }
-            .navigationTitle("RightTime")
-            .toolbar {
-                Button {
-                    showingAdd = true
-                } label: {
-                    Image(systemName: "plus")
-                }
+            .gesture(DragGesture(minimumDistance: 30).onEnded { value in
+                if value.translation.width < -60 { move(1) }
+                if value.translation.width > 60 { move(-1) }
+            })
+            .toolbar(.hidden, for: .navigationBar)
+            .navigationDestination(for: Date.self) { day in
+                DayDetailView(day: day)
             }
             .sheet(isPresented: $showingAdd) {
                 AddReminderView()
@@ -70,31 +88,150 @@ struct ScheduleView: View {
         }
     }
 
-    struct DayGroup: Identifiable {
-        var title: String
-        var items: [Reminder]
-        var id: String { title }
+    private var header: some View {
+        HStack(spacing: 12) {
+            Text(monthTitle).font(.title2.bold())
+            if learningMode {
+                Text("학습 모드")
+                    .font(.caption2.bold())
+                    .padding(.horizontal, 6).padding(.vertical, 3)
+                    .background(Capsule().fill(Color.orange.opacity(0.2)))
+                    .foregroundStyle(.orange)
+            }
+            Spacer()
+            Button { move(-1) } label: { Image(systemName: "chevron.left") }
+            Button("오늘") { month = calendar.startOfMonth(Date()) }.font(.subheadline)
+            Button { move(1) } label: { Image(systemName: "chevron.right") }
+            Button { showingAdd = true } label: { Image(systemName: "plus.circle.fill").font(.title3) }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
-    private func groupedByDay(_ items: [Reminder]) -> [DayGroup] {
-        let calendar = Calendar.current
-        var result: [DayGroup] = []
-        for item in items.sorted(by: { $0.deadline < $1.deadline }) {
-            let title: String
-            if calendar.isDateInToday(item.deadline) {
-                title = "오늘"
-            } else if calendar.isDateInTomorrow(item.deadline) {
-                title = "내일"
-            } else {
-                title = item.deadline.formatted(.dateTime.month().day().weekday())
-            }
-            if result.last?.title == title {
-                result[result.count - 1].items.append(item)
-            } else {
-                result.append(DayGroup(title: title, items: [item]))
+    private var weekdayRow: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(weekdays.enumerated()), id: \.offset) { index, name in
+                Text(name)
+                    .font(.caption)
+                    .foregroundStyle(index == 6 ? Color.red : Color.secondary)
+                    .frame(maxWidth: .infinity)
             }
         }
-        return result
+        .padding(.bottom, 6)
+    }
+
+    private var monthTitle: String {
+        let parts = calendar.dateComponents([.year, .month], from: month)
+        return "\(parts.year ?? 0)년 \(parts.month ?? 0)월"
+    }
+
+    /// 월요일부터 시작하는 주 단위 날짜 칸 (앞뒤 달 날짜 포함)
+    private var gridDays: [Date] {
+        guard let range = calendar.range(of: .day, in: .month, for: month) else { return [] }
+        let leading = (calendar.component(.weekday, from: month) + 5) % 7
+        let weeks = Int(ceil(Double(leading + range.count) / 7))
+        guard let first = calendar.date(byAdding: .day, value: -leading, to: month) else { return [] }
+        return (0..<(weeks * 7)).compactMap { calendar.date(byAdding: .day, value: $0, to: first) }
+    }
+
+    private func reminders(on day: Date) -> [Reminder] {
+        store.reminders
+            .filter { calendar.isDate($0.deadline, inSameDayAs: day) }
+            .sorted { $0.deadline < $1.deadline }
+    }
+
+    private func move(_ months: Int) {
+        if let next = calendar.date(byAdding: .month, value: months, to: month) {
+            withAnimation(.easeInOut(duration: 0.2)) { month = next }
+        }
+    }
+}
+
+struct DayCell: View {
+    let day: Date
+    let inMonth: Bool
+    let isSunday: Bool
+    let items: [Reminder]
+
+    private var isToday: Bool { Calendar.current.isDateInToday(day) }
+
+    var body: some View {
+        VStack(spacing: 3) {
+            Text("\(Calendar.current.component(.day, from: day))")
+                .font(.subheadline)
+                .foregroundStyle(isToday ? Color.white : (isSunday ? Color.red : Color.primary))
+                .frame(width: 26, height: 26)
+                .background {
+                    if isToday { Circle().fill(Color.accentColor) }
+                }
+            ForEach(items.prefix(3)) { item in
+                Text(item.title)
+                    .font(.system(size: 10, weight: .medium))
+                    .lineLimit(1)
+                    .padding(.horizontal, 3)
+                    .padding(.vertical, 2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(chipColor(item)))
+                    .foregroundStyle(.white)
+            }
+            if items.count > 3 {
+                Text("+\(items.count - 3)").font(.system(size: 9)).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.top, 4)
+        .padding(.horizontal, 2)
+        .opacity(inMonth ? 1 : 0.35)
+    }
+
+    private func chipColor(_ item: Reminder) -> Color {
+        switch item.status {
+        case .waiting: return .blue
+        case .delivered: return .orange
+        case .done: return .gray
+        }
+    }
+}
+
+struct DayDetailView: View {
+    let day: Date
+    @ObservedObject private var store = ReminderStore.shared
+    @State private var showingAdd = false
+
+    private var items: [Reminder] {
+        store.reminders
+            .filter { Calendar.current.isDate($0.deadline, inSameDayAs: day) }
+            .sorted { $0.windowStart < $1.windowStart }
+    }
+
+    var body: some View {
+        List {
+            if items.isEmpty {
+                Section {
+                    Text("이날 할 일이 없어요. 오른쪽 위 +로 추가하면, AI가 시간대 안에서 알림을 보기 좋은 때를 골라 알려 줘요.")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Section {
+                    ForEach(items) { ReminderRow(reminder: $0) }
+                        .onDelete { offsets in
+                            offsets.map { items[$0].id }.forEach(Planner.delete)
+                        }
+                } header: {
+                    Text("할 일 \(items.count)개")
+                } footer: {
+                    Text("오른쪽으로 밀면 완료, 왼쪽으로 밀면 삭제돼요. 파란색은 AI가 시점을 고르는 중, 주황색은 알림을 보낸 것, 회색은 끝난 일정이에요.")
+                }
+            }
+        }
+        .navigationTitle(day.formatted(.dateTime.month().day().weekday(.wide)))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            Button { showingAdd = true } label: { Image(systemName: "plus") }
+        }
+        .sheet(isPresented: $showingAdd) {
+            AddReminderView(day: day)
+        }
     }
 }
 
@@ -154,13 +291,31 @@ struct ReminderRow: View {
 struct AddReminderView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var title = ""
-    @State private var windowStart = Date()
-    @State private var deadline = Date().addingTimeInterval(2 * 60 * 60)
+    @State private var windowStart: Date
+    @State private var deadline: Date
+    @State private var now = Date()
 
-    private var valid: Bool {
-        !title.trimmingCharacters(in: .whitespaces).isEmpty
-            && deadline > Date().addingTimeInterval(2 * 60)
-            && deadline > windowStart
+    /// day를 주면 그날 일정으로 시작한다 (미래 날짜는 오전 9시부터).
+    init(day: Date? = nil) {
+        let calendar = Calendar.current
+        let now = Date()
+        var start = now
+        if let day, !calendar.isDateInToday(day), day > now,
+           let morning = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: day) {
+            start = morning
+        }
+        _windowStart = State(initialValue: start)
+        _deadline = State(initialValue: start.addingTimeInterval(2 * 60 * 60))
+    }
+
+    private var trimmedTitle: String { title.trimmingCharacters(in: .whitespaces) }
+
+    /// 추가할 수 없는 이유. nil이면 추가할 수 있다.
+    private var problem: String? {
+        if trimmedTitle.isEmpty { return "할 일을 입력하면 추가할 수 있어요." }
+        if deadline <= windowStart { return "마감은 시작 시각보다 뒤여야 해요." }
+        if deadline <= now.addingTimeInterval(2 * 60) { return "마감은 지금부터 2분 뒤 이후로 정해 주세요." }
+        return nil
     }
 
     var body: some View {
@@ -168,10 +323,16 @@ struct AddReminderView: View {
             Form {
                 Section {
                     TextField("할 일 (예: 과제 제출, 약 먹기)", text: $title)
+                } footer: {
+                    if trimmedTitle.isEmpty {
+                        Text("할 일을 입력해야 오른쪽 위 '추가'가 켜져요.")
+                    }
                 }
                 Section {
                     DatePicker("이때부터", selection: $windowStart, displayedComponents: [.date, .hourAndMinute])
-                    DatePicker("마감", selection: $deadline, in: Date()..., displayedComponents: [.date, .hourAndMinute])
+                    DatePicker("마감", selection: $deadline, displayedComponents: [.date, .hourAndMinute])
+                } header: {
+                    Text("시간대")
                 } footer: {
                     Text("AI가 이 사이에서 확인하기 좋은 때를 골라 알립니다. 끝까지 좋은 때가 없으면 마감 시각에 알립니다.")
                 }
@@ -180,7 +341,14 @@ struct AddReminderView: View {
                         quick("30분", 30)
                         quick("1시간", 60)
                         quick("3시간", 180)
-                        quick("오늘 밤", nil)
+                        quick("그날 밤", nil)
+                    }
+                }
+                if let problem {
+                    Section {
+                        Label(problem, systemImage: "exclamationmark.circle")
+                            .foregroundStyle(.red)
+                            .font(.subheadline)
                     }
                 }
             }
@@ -192,25 +360,26 @@ struct AddReminderView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("추가") {
-                        Planner.add(title: title.trimmingCharacters(in: .whitespaces),
-                                    windowStart: windowStart, deadline: deadline)
+                        Planner.add(title: trimmedTitle, windowStart: windowStart, deadline: deadline)
                         dismiss()
                     }
-                    .disabled(!valid)
+                    .disabled(problem != nil)
                 }
             }
+            .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { now = $0 }
         }
     }
 
+    /// 시작 시각(오늘이면 지금)부터 정한 길이만큼, 또는 그날 밤 10시까지
     private func quick(_ label: String, _ minutes: Int?) -> some View {
         Button(label) {
-            windowStart = Date()
+            let base = max(windowStart, Date())
+            windowStart = base
             if let minutes {
-                deadline = Date().addingTimeInterval(Double(minutes) * 60)
+                deadline = base.addingTimeInterval(Double(minutes) * 60)
             } else {
-                let calendar = Calendar.current
-                let tonight = calendar.date(bySettingHour: 22, minute: 0, second: 0, of: Date()) ?? Date()
-                deadline = tonight > Date().addingTimeInterval(10 * 60) ? tonight : Date().addingTimeInterval(60 * 60)
+                let night = Calendar.current.date(bySettingHour: 22, minute: 0, second: 0, of: base) ?? base
+                deadline = night > base.addingTimeInterval(10 * 60) ? night : base.addingTimeInterval(60 * 60)
             }
         }
         .buttonStyle(.bordered)
@@ -224,10 +393,31 @@ struct AIView: View {
     @ObservedObject private var model = OnlineModel.shared
     @ObservedObject private var store = ReminderStore.shared
     @State private var confirmReset = false
+    @AppStorage(Planner.learningModeKey) private var learningMode = false
+
+    private var upcomingProbes: Int {
+        store.probes.filter { !$0.delivered && $0.at > Date() }.count
+    }
 
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Toggle("사용자 학습 모드", isOn: Binding(
+                        get: { learningMode },
+                        set: { on in
+                            learningMode = on
+                            Planner.setLearningMode(on)
+                        }))
+                    if learningMode {
+                        LabeledContent("예약된 학습 알림", value: "\(upcomingProbes)개")
+                    }
+                } footer: {
+                    Text(learningMode
+                         ? "하루 \(Planner.probesPerDay)번(\(Planner.probeStartHour)~\(Planner.probeEndHour)시) 무작위 시각에 학습 알림을 보내 응답을 더 모읍니다. 데이터가 빨리 쌓여 더 빨리 내게 맞춰집니다."
+                         : "꺼 두면 직접 넣은 일정 알림만 보내고, 그 응답으로만 학습합니다. 켜면 무작위 학습 알림을 더 보내 더 빨리 개인화합니다.")
+                }
+
                 Section {
                     LabeledContent("지금 확인할 확률 p", value: store.lastP.map { String(format: "%.2f", $0) } ?? "-")
                     LabeledContent("기준 θ (마감 가까우면 절반까지 낮춤)", value: String(format: "%.2f", model.theta))

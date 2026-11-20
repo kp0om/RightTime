@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         UNUserNotificationCenter.current().delegate = self
         Planner.registerCategory()
         Planner.registerBackgroundTask()
-        LogStore.shared.add("앱 시작 (v2, 번들 \(Bundle.main.bundleIdentifier ?? "?"))")
+        LogStore.shared.add("앱 시작 (v3, 번들 \(Bundle.main.bundleIdentifier ?? "?"))")
         return true
     }
 

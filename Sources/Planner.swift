@@ -22,6 +22,15 @@ enum Planner {
     static let confirmAction = "confirm"
     static let laterAction = "later"
 
+    // 사용자 학습 모드: 일정과 별개로 하루 몇 번 무작위 시각에 학습 알림을 보내 응답을 더 모은다
+    static let learningModeKey = "learningMode"
+    static let probesPerDay = 4
+    static let probeStartHour = 9
+    static let probeEndHour = 22
+    static let probeGap: TimeInterval = 45 * 60
+
+    static var learningMode: Bool { UserDefaults.standard.bool(forKey: learningModeKey) }
+
     private static var store: ReminderStore { .shared }
     private static var model: OnlineModel { .shared }
     private static var running = false
@@ -110,16 +119,23 @@ enum Planner {
     /// 이 전달에 해당하는 샘플을 찾거나 만든다. 일정 상태도 '전달됨'으로 바꾼다.
     @discardableResult
     private static func ensureSample(reminderId: String, kind: DeliveryKind, deliveredAt: Date) -> Int? {
-        guard let ri = store.reminderIndex(reminderId) else { return nil }
-        if store.reminders[ri].status == .waiting {
-            store.reminders[ri].status = .delivered
+        let title: String
+        if let ri = store.reminderIndex(reminderId) {
+            if store.reminders[ri].status == .waiting {
+                store.reminders[ri].status = .delivered
+            }
+            title = store.reminders[ri].title
+        } else if kind == .probe, let pi = store.probes.firstIndex(where: { $0.id == reminderId }) {
+            store.probes[pi].delivered = true
+            title = "학습 알림"
+        } else {
+            return nil
         }
         if let si = store.openSampleIndex(reminderId: reminderId, kind: kind) {
             store.samples[si].deliveredAt = deliveredAt
             return si
         }
-        store.samples.append(Sample(reminderId: reminderId, title: store.reminders[ri].title,
-                                    kind: kind, deliveredAt: deliveredAt))
+        store.samples.append(Sample(reminderId: reminderId, title: title, kind: kind, deliveredAt: deliveredAt))
         return store.samples.count - 1
     }
 
@@ -189,6 +205,9 @@ enum Planner {
         ContextCollector.shared.startAccelerometerRecording()
 
         syncDeliveries {
+            if learningMode {
+                topUpProbes()
+            }
             finalizeLabels()
             collectMissingFeatures {
                 learn()
@@ -219,6 +238,11 @@ enum Planner {
                         guard at <= now, !pendingIDs.contains(id) else { continue }
                         ensureSample(reminderId: reminder.id, kind: kind, deliveredAt: deliveredDates[id] ?? at)
                         LogStore.shared.add("\(kind.korean) 알림 전달 확인: \(reminder.title)")
+                    }
+                    for probe in store.probes where !probe.delivered && probe.at <= now {
+                        let id = notificationID(probe.id, .probe)
+                        guard !pendingIDs.contains(id) else { continue }
+                        ensureSample(reminderId: probe.id, kind: .probe, deliveredAt: deliveredDates[id] ?? probe.at)
                     }
                     next()
                 }
@@ -313,6 +337,80 @@ enum Planner {
                 LogStore.shared.add(String(format: "AI 전달: %@ (p %.2f ≥ θ %.2f)", target.title, p, theta))
             }
             next()
+        }
+    }
+
+    // MARK: - 사용자 학습 모드
+
+    static func setLearningMode(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: learningModeKey)
+        if on {
+            LogStore.shared.add("사용자 학습 모드 켬: 하루 \(probesPerDay)번 학습 알림")
+            topUpProbes()
+        } else {
+            let waiting = store.probes.filter { !$0.delivered }
+            UNUserNotificationCenter.current().removePendingNotificationRequests(
+                withIdentifiers: waiting.map { notificationID($0.id, .probe) })
+            store.probes.removeAll { !$0.delivered }
+            UserDefaults.standard.removeObject(forKey: plannedDaysKey)
+            LogStore.shared.add("사용자 학습 모드 끔: 예약된 학습 알림 \(waiting.count)개 취소")
+        }
+        store.save()
+    }
+
+    private static let plannedDaysKey = "probePlannedDays"
+
+    /// 오늘 남은 시간과 내일의 학습 알림을 하루에 한 번만 정한다. 오늘은 남은 시간에 비례해 줄인다.
+    private static func topUpProbes() {
+        let calendar = Calendar.current
+        let now = Date()
+        var planned = Set(UserDefaults.standard.stringArray(forKey: plannedDaysKey) ?? [])
+        var added = 0
+        for offset in 0...1 {
+            guard let day = calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: now)),
+                  let dayStart = calendar.date(bySettingHour: probeStartHour, minute: 0, second: 0, of: day),
+                  let dayEnd = calendar.date(bySettingHour: probeEndHour, minute: 0, second: 0, of: day) else { continue }
+            let parts = calendar.dateComponents([.year, .month, .day], from: day)
+            let key = "\(parts.year ?? 0)-\(parts.month ?? 0)-\(parts.day ?? 0)"
+            let from = max(dayStart, now.addingTimeInterval(10 * 60))
+            guard !planned.contains(key), from < dayEnd else { continue }
+            planned.insert(key)
+            let fraction = dayEnd.timeIntervalSince(from) / dayEnd.timeIntervalSince(dayStart)
+            let target = Int((Double(probesPerDay) * fraction).rounded(.up))
+            let existing = store.probes.filter { $0.at >= from && $0.at <= dayEnd }
+            var times = existing.map(\.at)
+            var need = target - existing.count
+            var candidates = stride(from: from.timeIntervalSince1970, to: dayEnd.timeIntervalSince1970, by: 60).shuffled()
+            while need > 0, let t = candidates.popLast() {
+                let date = Date(timeIntervalSince1970: t)
+                guard times.allSatisfy({ abs($0.timeIntervalSince(date)) >= probeGap }) else { continue }
+                let probe = Probe(at: date)
+                store.probes.append(probe)
+                times.append(date)
+                scheduleProbe(probe)
+                need -= 1
+                added += 1
+            }
+        }
+        UserDefaults.standard.set(Array(planned.sorted().suffix(30)), forKey: plannedDaysKey)
+        if added > 0 {
+            store.probes.sort { $0.at < $1.at }
+            LogStore.shared.add("학습 알림 \(added)개 예약")
+        }
+    }
+
+    private static func scheduleProbe(_ probe: Probe) {
+        let content = UNMutableNotificationContent()
+        content.title = "RightTime 학습 알림"
+        content.body = "지금 알림을 보기 편한 때인지 배우는 중이에요. 확인했다면 눌러 주세요."
+        content.sound = .default
+        content.categoryIdentifier = categoryID
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, probe.at.timeIntervalSinceNow), repeats: false)
+        let request = UNNotificationRequest(identifier: notificationID(probe.id, .probe), content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                LogStore.shared.add("학습 알림 예약 실패: \(error.localizedDescription)")
+            }
         }
     }
 
