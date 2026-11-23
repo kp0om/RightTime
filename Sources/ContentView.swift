@@ -1,6 +1,12 @@
 import SwiftUI
 import UserNotifications
 
+extension Color {
+    /// 앱 아이콘의 남색 (#4F5BD5)과 주황 (#FF9F43)
+    static let brand = Color(red: 0x4F / 255, green: 0x5B / 255, blue: 0xD5 / 255)
+    static let brandAccent = Color(red: 0xFF / 255, green: 0x9F / 255, blue: 0x43 / 255)
+}
+
 struct ContentView: View {
     // 앱이 화면에 있는 동안 30초마다 AI가 지금 보낼지 다시 판단한다 (시연용)
     private let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
@@ -14,6 +20,7 @@ struct ContentView: View {
             SettingsView()
                 .tabItem { Label("설정·기록", systemImage: "gearshape") }
         }
+        .tint(.brand)
         .onReceive(timer) { _ in
             Planner.wake(reason: "화면 30초")
         }
@@ -186,8 +193,8 @@ struct DayCell: View {
 
     private func chipColor(_ item: Reminder) -> Color {
         switch item.status {
-        case .waiting: return .blue
-        case .delivered: return .orange
+        case .waiting: return .brand
+        case .delivered: return .brandAccent
         case .done: return .gray
         }
     }
@@ -208,8 +215,18 @@ struct DayDetailView: View {
         List {
             if items.isEmpty {
                 Section {
-                    Text("이날 할 일이 없어요. 오른쪽 위 +로 추가하면, AI가 시간대 안에서 알림을 보기 좋은 때를 골라 알려 줘요.")
-                        .foregroundStyle(.secondary)
+                    VStack(spacing: 12) {
+                        Image("EmptyDay")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 220)
+                        Text("이날 할 일이 없어요. 오른쪽 위 +로 추가하면, AI가 시간대 안에서 알림을 보기 좋은 때를 골라 알려 줘요.")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
                 }
             } else {
                 Section {
@@ -294,6 +311,9 @@ struct AddReminderView: View {
     @State private var windowStart: Date
     @State private var deadline: Date
     @State private var now = Date()
+    @State private var confirmUntitled = false
+
+    static let untitled = "이름 없는 알림"
 
     /// day를 주면 그날 일정으로 시작한다 (미래 날짜는 오전 9시부터).
     init(day: Date? = nil) {
@@ -312,7 +332,6 @@ struct AddReminderView: View {
 
     /// 추가할 수 없는 이유. nil이면 추가할 수 있다.
     private var problem: String? {
-        if trimmedTitle.isEmpty { return "할 일을 입력하면 추가할 수 있어요." }
         if deadline <= windowStart { return "마감은 시작 시각보다 뒤여야 해요." }
         if deadline <= now.addingTimeInterval(2 * 60) { return "마감은 지금부터 2분 뒤 이후로 정해 주세요." }
         return nil
@@ -325,7 +344,7 @@ struct AddReminderView: View {
                     TextField("할 일 (예: 과제 제출, 약 먹기)", text: $title)
                 } footer: {
                     if trimmedTitle.isEmpty {
-                        Text("할 일을 입력해야 오른쪽 위 '추가'가 켜져요.")
+                        Text("비워 두고 추가하면 '\(Self.untitled)'으로 추가할지 물어봐요.")
                     }
                 }
                 Section {
@@ -360,14 +379,28 @@ struct AddReminderView: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("추가") {
-                        Planner.add(title: trimmedTitle, windowStart: windowStart, deadline: deadline)
-                        dismiss()
+                        if trimmedTitle.isEmpty {
+                            confirmUntitled = true
+                        } else {
+                            save(trimmedTitle)
+                        }
                     }
                     .disabled(problem != nil)
                 }
             }
             .onReceive(Timer.publish(every: 15, on: .main, in: .common).autoconnect()) { now = $0 }
+            .alert("알림 이름이 작성되지 않았습니다. 적용하시겠습니까?", isPresented: $confirmUntitled) {
+                Button("예") { save(Self.untitled) }
+                Button("아니오", role: .cancel) {}
+            } message: {
+                Text("'예'를 누르면 '\(Self.untitled)'으로 추가돼요.")
+            }
         }
+    }
+
+    private func save(_ name: String) {
+        Planner.add(title: name, windowStart: windowStart, deadline: deadline)
+        dismiss()
     }
 
     /// 시작 시각(오늘이면 지금)부터 정한 길이만큼, 또는 그날 밤 10시까지
@@ -403,6 +436,12 @@ struct AIView: View {
         NavigationStack {
             List {
                 Section {
+                    Image("LearningMode")
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 90)
+                        .opacity(learningMode ? 1 : 0.4)
                     Toggle("사용자 학습 모드", isOn: Binding(
                         get: { learningMode },
                         set: { on in
@@ -498,6 +537,24 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    HStack(spacing: 14) {
+                        Image("LogoMark")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 56, height: 56)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("RightTime").font(.title3.bold())
+                            Text("알림 보기 좋은 때를 기기 안 AI가 골라 줘요")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("버전 \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "-")")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
                 Section("권한") {
                     LabeledContent("알림", value: notificationStatus)
                     LabeledContent("모션", value: ContextCollector.isAuthorized ? "허용됨" : "허용 안 됨")

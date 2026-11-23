@@ -9,3 +9,5 @@ data/
 Sources/Info.plist
 *.json
 __pycache__/
+!Sources/Assets.xcassets/**/Contents.json
+!Sources/Assets.xcassets/Contents.json
