@@ -42,14 +42,20 @@ extension Calendar {
 }
 
 struct CalendarView: View {
-    @ObservedObject private var store = ReminderStore.shared
     @AppStorage(Planner.learningModeKey) private var learningMode = false
-    @State private var month = Calendar.mondayFirst.startOfMonth(Date())
+    /// 이번 달을 0으로 한 달 번호. 페이지를 넘기면 바뀐다.
+    @State private var page = 0
     @State private var path: [Date] = []
     @State private var showingAdd = false
 
     private let calendar = Calendar.mondayFirst
+    private let pages = -12...24
     private let weekdays = ["월", "화", "수", "목", "금", "토", "일"]
+    private let thisMonth = Calendar.mondayFirst.startOfMonth(Date())
+
+    private func month(_ offset: Int) -> Date {
+        calendar.date(byAdding: .month, value: offset, to: thisMonth) ?? thisMonth
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -57,34 +63,15 @@ struct CalendarView: View {
                 header
                 weekdayRow
                 Divider()
-                GeometryReader { geo in
-                    let days = gridDays
-                    let rows = days.count / 7
-                    let height = geo.size.height / CGFloat(max(rows, 1))
-                    VStack(spacing: 0) {
-                        ForEach(0..<rows, id: \.self) { row in
-                            HStack(spacing: 0) {
-                                ForEach(0..<7, id: \.self) { column in
-                                    let day = days[row * 7 + column]
-                                    DayCell(day: day,
-                                            inMonth: calendar.isDate(day, equalTo: month, toGranularity: .month),
-                                            isSunday: column == 6,
-                                            items: reminders(on: day))
-                                        .frame(maxWidth: .infinity)
-                                        .frame(height: height)
-                                        .contentShape(Rectangle())
-                                        .onTapGesture { path.append(day) }
-                                }
-                            }
-                            Divider()
-                        }
+                // 손가락을 따라 옆 달이 이어서 밀려 들어오도록 페이지 넘김으로 보여 준다
+                TabView(selection: $page) {
+                    ForEach(pages, id: \.self) { offset in
+                        MonthGrid(month: month(offset)) { day in path.append(day) }
+                            .tag(offset)
                     }
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
             }
-            .gesture(DragGesture(minimumDistance: 30).onEnded { value in
-                if value.translation.width < -60 { move(1) }
-                if value.translation.width > 60 { move(-1) }
-            })
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: Date.self) { day in
                 DayDetailView(day: day)
@@ -97,18 +84,23 @@ struct CalendarView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Text(monthTitle).font(.title2.bold())
+            Text(monthTitle)
+                .font(.title2.bold())
+                .contentTransition(.numericText())
+                .animation(.easeInOut, value: page)
             if learningMode {
                 Text("학습 모드")
                     .font(.caption2.bold())
                     .padding(.horizontal, 6).padding(.vertical, 3)
-                    .background(Capsule().fill(Color.orange.opacity(0.2)))
-                    .foregroundStyle(.orange)
+                    .background(Capsule().fill(Color.brandAccent.opacity(0.2)))
+                    .foregroundStyle(Color.brandAccent)
             }
             Spacer()
             Button { move(-1) } label: { Image(systemName: "chevron.left") }
-            Button("오늘") { month = calendar.startOfMonth(Date()) }.font(.subheadline)
+                .disabled(page <= pages.lowerBound)
+            Button("오늘") { withAnimation { page = 0 } }.font(.subheadline)
             Button { move(1) } label: { Image(systemName: "chevron.right") }
+                .disabled(page >= pages.upperBound)
             Button { showingAdd = true } label: { Image(systemName: "plus.circle.fill").font(.title3) }
         }
         .padding(.horizontal, 16)
@@ -128,11 +120,50 @@ struct CalendarView: View {
     }
 
     private var monthTitle: String {
-        let parts = calendar.dateComponents([.year, .month], from: month)
+        let parts = calendar.dateComponents([.year, .month], from: month(page))
         return "\(parts.year ?? 0)년 \(parts.month ?? 0)월"
     }
 
-    /// 월요일부터 시작하는 주 단위 날짜 칸 (앞뒤 달 날짜 포함)
+    private func move(_ months: Int) {
+        let next = min(max(page + months, pages.lowerBound), pages.upperBound)
+        withAnimation(.easeInOut(duration: 0.3)) { page = next }
+    }
+}
+
+/// 한 달 칸. 월요일부터 시작하는 주 단위로, 앞뒤 달 날짜는 흐리게 보인다.
+struct MonthGrid: View {
+    let month: Date
+    let onTap: (Date) -> Void
+    @ObservedObject private var store = ReminderStore.shared
+    private let calendar = Calendar.mondayFirst
+
+    var body: some View {
+        GeometryReader { geo in
+            let days = gridDays
+            let rows = days.count / 7
+            let height = geo.size.height / CGFloat(max(rows, 1))
+            VStack(spacing: 0) {
+                ForEach(0..<rows, id: \.self) { row in
+                    HStack(spacing: 0) {
+                        ForEach(0..<7, id: \.self) { column in
+                            let day = days[row * 7 + column]
+                            DayCell(day: day,
+                                    inMonth: calendar.isDate(day, equalTo: month, toGranularity: .month),
+                                    isSunday: column == 6,
+                                    items: reminders(on: day))
+                                .frame(maxWidth: .infinity)
+                                .frame(height: height)
+                                .contentShape(Rectangle())
+                                .onTapGesture { onTap(day) }
+                        }
+                    }
+                    Divider()
+                }
+            }
+        }
+        .background(Color(.systemBackground))
+    }
+
     private var gridDays: [Date] {
         guard let range = calendar.range(of: .day, in: .month, for: month) else { return [] }
         let leading = (calendar.component(.weekday, from: month) + 5) % 7
@@ -145,12 +176,6 @@ struct CalendarView: View {
         store.reminders
             .filter { calendar.isDate($0.deadline, inSameDayAs: day) }
             .sorted { $0.deadline < $1.deadline }
-    }
-
-    private func move(_ months: Int) {
-        if let next = calendar.date(byAdding: .month, value: months, to: month) {
-            withAnimation(.easeInOut(duration: 0.2)) { month = next }
-        }
     }
 }
 
@@ -315,17 +340,21 @@ struct AddReminderView: View {
 
     static let untitled = "이름 없는 알림"
 
-    /// day를 주면 그날 일정으로 시작한다 (미래 날짜는 오전 9시부터).
+    /// day를 주면 그날 일정으로 시작한다 (미래 날짜는 오전 8시 ~ 밤 11시).
     init(day: Date? = nil) {
         let calendar = Calendar.current
         let now = Date()
         var start = now
+        var end = now.addingTimeInterval(2 * 60 * 60)
+        // 오늘이 아닌 날은 하루를 넉넉하게 잡는다 (오전 8시 ~ 밤 11시)
         if let day, !calendar.isDateInToday(day), day > now,
-           let morning = calendar.date(bySettingHour: 9, minute: 0, second: 0, of: day) {
+           let morning = calendar.date(bySettingHour: 8, minute: 0, second: 0, of: day),
+           let night = calendar.date(bySettingHour: 23, minute: 0, second: 0, of: day) {
             start = morning
+            end = night
         }
         _windowStart = State(initialValue: start)
-        _deadline = State(initialValue: start.addingTimeInterval(2 * 60 * 60))
+        _deadline = State(initialValue: end)
     }
 
     private var trimmedTitle: String { title.trimmingCharacters(in: .whitespaces) }
@@ -457,6 +486,8 @@ struct AIView: View {
                          : "꺼 두면 직접 넣은 일정 알림만 보내고, 그 응답으로만 학습합니다. 켜면 무작위 학습 알림을 더 보내 더 빨리 개인화합니다.")
                 }
 
+                DemoSection()
+
                 Section {
                     LabeledContent("지금 확인할 확률 p", value: store.lastP.map { String(format: "%.2f", $0) } ?? "-")
                     LabeledContent("기준 θ (마감 가까우면 절반까지 낮춤)", value: String(format: "%.2f", model.theta))
@@ -524,6 +555,62 @@ struct AIView: View {
             .confirmationDialog("기기에서 학습한 가중치를 시작 모델로 되돌릴까요?", isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("되돌리기", role: .destructive) { model.reset() }
             }
+        }
+    }
+}
+
+// MARK: - 발표 시연
+
+struct DemoSection: View {
+    @ObservedObject private var demo = DemoRunner.shared
+
+    var body: some View {
+        Section {
+            Button {
+                demo.startLive()
+            } label: {
+                if demo.running {
+                    Label("\(demo.remaining)초 뒤 판단해요. 폰을 내려놓거나 들고 걸어 보세요", systemImage: "timer")
+                } else {
+                    Label("10초 뒤 지금 상황으로 판단하기", systemImage: "play.circle.fill")
+                }
+            }
+            .disabled(demo.running)
+
+            ForEach(DemoScenario.all) { scenario in
+                Button {
+                    demo.runScenario(scenario)
+                } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(scenario.name)
+                        Text(scenario.detail).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            if let r = demo.last {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Image(systemName: r.send ? "bell.badge.fill" : "pause.circle.fill")
+                            .foregroundStyle(r.send ? Color.brandAccent : Color.secondary)
+                        Text(r.send ? "보냄: 지금이 좋은 때" : "보류: 지금은 보내지 않음").font(.headline)
+                    }
+                    Text(r.title).font(.subheadline)
+                    Text(String(format: "확인할 확률 %.0f%% %@ 기준 %.0f%%", r.p * 100, r.send ? "≥" : "<", r.theta * 100))
+                        .font(.subheadline.monospacedDigit())
+                    if !r.up.isEmpty {
+                        Text("올린 이유: " + r.up.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !r.down.isEmpty {
+                        Text("내린 이유: " + r.down.joined(separator: ", ")).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        } header: {
+            Text("발표 시연")
+        } footer: {
+            Text("상황을 누르면 5초 뒤 결과가 알림으로 와요. 그 사이 화면을 잠그면 잠금 화면에서 보여 줄 수 있어요. 시연 결과는 학습에 쓰지 않아요.")
         }
     }
 }

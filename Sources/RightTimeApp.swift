@@ -16,7 +16,10 @@ struct RightTimeApp: App {
                 ContextCollector.shared.startLiveAccelerometer()
                 Planner.wake(reason: "앱 열림")
             case .background:
-                ContextCollector.shared.stopLiveAccelerometer()
+                // 발표 시연 중에는 화면을 꺼도 10초 동안 가속도를 계속 받는다
+                if !DemoRunner.shared.running {
+                    ContextCollector.shared.stopLiveAccelerometer()
+                }
             default:
                 break
             }

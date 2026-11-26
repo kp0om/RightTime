@@ -65,6 +65,14 @@ final class OnlineModel: ObservableObject {
         return Self.sigmoid(logit)
     }
 
+    /// 특징별로 확률을 올리고 내린 정도 (가중치 × 표준화 값). 발표 시연에서 판단 이유를 보여 줄 때 쓴다.
+    func contributions(_ x: [Double?]) -> [(name: String, value: Double)] {
+        let z = standardized(x)
+        return state.features.indices.map { i in
+            (Features.koreanNames[state.features[i]] ?? state.features[i], state.coef[i] * z[i])
+        }
+    }
+
     /// 샘플 하나로 SGD 한 걸음. 갱신 전후 예측값을 돌려준다.
     @discardableResult
     func update(_ x: [Double?], label y: Int) -> (before: Double, after: Double) {
